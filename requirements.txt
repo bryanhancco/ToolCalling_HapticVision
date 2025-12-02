@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+gunicorn
+pydantic
+langchain
+langchain-google-genai
+langchain_community
+tiktoken
+google-generativeai
+google-genai
+requests
+python-multipart
+dotenv
