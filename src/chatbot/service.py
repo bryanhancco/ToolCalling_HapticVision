@@ -105,7 +105,7 @@ def tool_calling(message: str):
         },
     }
 
-    client = genai.Client()
+    client = genai.Client(api_key=google_api_key)
     tool_spec = types.Tool(function_declarations=[navigate_fn, haptic_fn, camera_fn])
     config = types.GenerateContentConfig(tools=[tool_spec])
 
