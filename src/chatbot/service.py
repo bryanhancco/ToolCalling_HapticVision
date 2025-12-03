@@ -4,12 +4,6 @@ from langchain_core.tools import tool
 from dotenv import load_dotenv, find_dotenv
 from google import genai
 from google.genai import types
-from ..recognition.service import (
-    classify_image_bytes,
-    classify_figure_bytes,
-    classify_number_bytes,
-    classify_direction_bytes,
-)
 import os
 import base64
 from typing import Any
@@ -36,14 +30,14 @@ def chat(message: str):
     """Enviar un mensaje genérico al LLM y devolver la respuesta.
 
     Este método no usa documentos recuperados; construye un prompt genérico
-    con un `SystemMessage` que define el comportamiento (agente educativo)
+    con un `SystemMessage` que define el comportamiento (agente HapticVision)
     y el `HumanMessage` con el `message` recibido.
     """
     # Construimos los mensajes
     messages = [
         SystemMessage(
             content=(
-                "Eres un agente educativo que ayuda a los estudiantes con edades de entre 3 y 7 años a responder preguntas de forma sencilla, evitando lenguaje inapropiado o complejo. Responde siempre de manera amigable y clara."
+                "Eres un asistente inteligente para la aplicación HapticVision. Tu objetivo es ayudar al usuario a navegar por la aplicación y controlar sus funciones mediante comandos de voz. Responde de manera breve y útil."
             )
         ),
         HumanMessage(
@@ -58,76 +52,83 @@ def chat(message: str):
     return word_wrap(str(response))
 
 def tool_calling(message: str):
-    def _wrap_image_to_bytes_call(fn):
-        def _inner(args: dict[str, Any]):
-            # accept either direct base64 or nested values
-            if not isinstance(args, dict):
-                return {"error": "invalid arguments, expected object with 'image_b64'"}
-            b64 = args.get('image_b64') or args.get('image') or args.get('image_base64')
-            if not b64:
-                return {"error": "missing 'image_b64' in arguments"}
-            try:
-                img_bytes = base64.b64decode(b64)
-            except Exception as e:
-                return {"error": f"invalid base64 image: {e}"}
-            try:
-                result = fn(img_bytes)
-                # normalize result to JSON-serializable form
-                if isinstance(result, tuple) or isinstance(result, list):
-                    return list(result)
-                return result
-            except Exception as e:
-                return {"error": str(e)}
-        return _inner
-
-    function_map = {
-        "colores": _wrap_image_to_bytes_call(lambda b: classify_image_bytes(b)),
-        "figuras": _wrap_image_to_bytes_call(lambda b: classify_figure_bytes(b)),
-        "numeros": _wrap_image_to_bytes_call(lambda b: classify_number_bytes(b)),
-        "direccion": _wrap_image_to_bytes_call(lambda b: classify_direction_bytes(b)),
+    # Declaraciones de herramientas para el control de la aplicación
+    
+    # Herramienta de navegación
+    navigate_fn = {
+        "name": "navigate",
+        "description": "Navegar a una pantalla específica de la aplicación.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "screen": {
+                    "type": "string",
+                    "enum": ["camera", "haptic", "settings", "home"],
+                    "description": "La pantalla a la que se desea ir."
+                }
+            },
+            "required": ["screen"]
+        },
     }
 
-    # Declaraciones de función para la API (schema que el modelo puede usar
-    # para decidir hacer una llamada a función).
-    # function declarations — include parameters so the model knows to send a JSON object
-    colores_fn = {
-        "name": "colores",
-        "description": "Identificar color predominante en la imagen (espera {'image_b64': '<base64>'}).",
-        "parameters": {"type": "object", "properties": {"image_b64": {"type": "string", "description": "Imagen codificada en base64"}}, "required": ["image_b64"]},
+    # Herramienta de feedback háptico
+    haptic_fn = {
+        "name": "haptic_feedback",
+        "description": "Generar una vibración háptica correspondiente a una emoción.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "emotion": {
+                    "type": "string",
+                    "enum": ["neutral", "happy", "angry", "sad"],
+                    "description": "La emoción para generar la vibración."
+                }
+            },
+            "required": ["emotion"]
+        },
     }
 
-    figuras_fn = {
-        "name": "figuras",
-        "description": "Detectar figura geométrica en la imagen (espera {'image_b64': '<base64>'}).",
-        "parameters": {"type": "object", "properties": {"image_b64": {"type": "string"}}, "required": ["image_b64"]},
-    }
-
-    numeros_fn = {
-        "name": "numeros",
-        "description": "Reconocer dígito en la imagen (espera {'image_b64': '<base64>'}).",
-        "parameters": {"type": "object", "properties": {"image_b64": {"type": "string"}}, "required": ["image_b64"]},
-    }
-
-    direccion_fn = {
-        "name": "direccion",
-        "description": "Determinar si la mano está a la izquierda o derecha (espera {'image_b64': '<base64>'}).",
-        "parameters": {"type": "object", "properties": {"image_b64": {"type": "string"}}, "required": ["image_b64"]},
+    # Herramienta de control de cámara
+    camera_fn = {
+        "name": "camera_control",
+        "description": "Controlar la cámara (ej. cambiar entre frontal y trasera).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["switch_camera"],
+                    "description": "La acción a realizar en la cámara."
+                }
+            },
+            "required": ["action"]
+        },
     }
 
     client = genai.Client()
-    tool_spec = types.Tool(function_declarations=[colores_fn, figuras_fn, numeros_fn, direccion_fn])
+    tool_spec = types.Tool(function_declarations=[navigate_fn, haptic_fn, camera_fn])
     config = types.GenerateContentConfig(tools=[tool_spec])
+
+    # Prompt del sistema para definir el comportamiento del modelo
+    system_instruction = "Eres un asistente inteligente para la aplicación HapticVision. Tu objetivo es ayudar al usuario a navegar por la aplicación y controlar sus funciones (cámara, vibración, configuración) mediante comandos de voz. Interpreta la intención del usuario y llama a la herramienta adecuada."
 
     # Usamos el mensaje del usuario como contenido para el modelo
     response = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents=message,
+        contents=[
+            types.Content(role="user", parts=[types.Part(text=system_instruction)]),
+            types.Content(role="user", parts=[types.Part(text=message)])
+        ],
         config=config,
     )
 
     # Verificar si el modelo solicitó una llamada a función
-    if response.candidates[0].content.parts[0].function_call:
-        function_call = response.candidates[0].content.parts[0].function_call
-        return function_call.name
-    else:
-        return None
+    if response.candidates and response.candidates[0].content.parts:
+        part = response.candidates[0].content.parts[0]
+        if part.function_call:
+            return {
+                "name": part.function_call.name,
+                "args": dict(part.function_call.args)
+            }
+    
+    return None
